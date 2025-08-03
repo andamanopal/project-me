@@ -1,0 +1,23 @@
+# RunPod Serverless Voice Pipeline Dependencies
+
+# RunPod SDK
+runpod>=1.7.0
+
+# Pipecat AI framework (manages daily-python and anthropic versions)
+pipecat-ai[daily,silero,anthropic]>=0.0.54
+
+# Speech-to-Text: Faster-Whisper (manages ctranslate2)
+faster-whisper>=1.0.3
+
+# Text-to-Speech: Chatterbox - installed separately in Dockerfile with --no-deps
+# due to numpy version conflict with pipecat-ai (see GitHub issue #146)
+# chatterbox-tts==0.1.6
+
+# Audio processing
+# numpy>=1.24.0,<2.0.0
+scipy
+soundfile>=0.12.0
+
+# Utilities
+python-dotenv>=1.0.0
+loguru>=0.7.0

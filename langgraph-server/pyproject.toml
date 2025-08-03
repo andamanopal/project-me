@@ -1,0 +1,97 @@
+[project]
+name = "agent"
+version = "0.0.1"
+description = "Starter template for making a new agent LangGraph."
+authors = [
+    { name = "William Fu-Hinthorn", email = "13333726+hinthornw@users.noreply.github.com" },
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.6",
+    "python-dotenv>=1.0.1",
+    "llama-index>=0.12.0",
+    "llama-index-embeddings-openai>=0.3.0",
+    "llama-index-vector-stores-elasticsearch>=0.4.0",
+    "pandas>=2.2.3",
+    "requests>=2.32.5",
+    "httpx>=0.28.1",
+    "langchain-core>=1.1.1",
+    "langchain-anthropic>=1.2.0",
+    "llama-index-embeddings-voyageai>=0.5.1",
+    "elasticsearch>=8.19.2",
+    # FastAPI server
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "sse-starlette>=2.1.0",
+    "pydantic-settings>=2.0.0",
+    "python-multipart>=0.0.6",  # File upload support
+    # Supabase
+    "supabase>=2.0.0",
+    # ElevenLabs transcription (Story 2.3)
+    "tenacity>=8.2.0",
+    # Background job scheduler (Story 3.3)
+    "apscheduler>=3.10.0",
+    # Timezone support (Story 4.1)
+    "pytz>=2024.1",
+    # LangGraph Postgres checkpointer for persistent conversations
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary]>=3.1.0",
+]
+
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["langgraph.templates.agent", "agent"]
+[tool.setuptools.package-dir]
+"langgraph.templates.agent" = "src/agent"
+"agent" = "src/agent"
+
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.ruff]
+lint.select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "D",    # pydocstyle
+    "D401", # First line should be in imperative mood
+    "T201",
+    "UP",
+]
+lint.ignore = [
+    "UP006",
+    "UP007",
+    # We actually do want to import from typing_extensions
+    "UP035",
+    # Relax the convention by _not_ requiring documentation for every function parameter.
+    "D417",
+    "E501",
+]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "UP"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[dependency-groups]
+dev = [
+    "anyio>=4.7.0",
+    "langgraph-cli[inmem]>=0.2.8",
+    "mypy>=1.13.0",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.2",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

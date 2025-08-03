@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # fastapi-server:
+  #   build: 
+  #     context: ./fastapi-server
+  #     dockerfile: Dockerfile
+  #   container_name: project-me-fastapi
+  #   ports:
+  #     - "8001:8001"
+  #   volumes:
+  #     # Mount data directory for CSV persistence
+  #     - ./data:/app/data
+  #     # Mount the current todos.csv and processed_lifelogs.csv to the data directory
+  #     - ./fastapi-server/todos.csv:/app/todos.csv
+  #     - ./fastapi-server/processed_lifelogs.csv:/app/processed_lifelogs.csv
+  #   environment:
+  #     # Load from .env file
+  #     - LIMITLESS_API_KEY=${LIMITLESS_API_KEY}
+  #     - LANGGRAPH_URL=http://langgraph-server:2024
+  #     - LANGGRAPH_ASSISTANT_ID=${LANGGRAPH_ASSISTANT_ID:-agent}
+  #     - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
+  #     - LINE_USER_ID=${LINE_USER_ID}
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #   depends_on:
+  #     - langgraph-server
+  #   restart: unless-stopped
+  #   networks:
+  #     - project-me-network
+
+  # langgraph-server:
+  #   build:
+  #     context: ./langgraph-server
+  #     dockerfile: Dockerfile
+  #   container_name: project-me-langgraph
+  #   ports:
+  #     - "2024:2024"
+  #   volumes:
+  #     # Mount data directory for shared CSV access
+  #     - ./data:/app/data
+  #     # Mount the CSV files so LangGraph tools can access them
+  #     - ./fastapi-server/todos.csv:/app/../fastapi-server/todos.csv
+  #     - ./fastapi-server/processed_lifelogs.csv:/app/../fastapi-server/processed_lifelogs.csv
+  #   environment:
+  #     # Load from .env file
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #     - LINE_CHANNEL_ACCESS_TOKEN=${LINE_CHANNEL_ACCESS_TOKEN}
+  #     - LINE_USER_ID=${LINE_USER_ID}
+  #     - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+  #   restart: unless-stopped
+  #   networks:
+  #     - project-me-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
+    container_name: project-me-elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.license.self_generated.type=basic
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - project-me-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.2
+    container_name: project-me-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - project-me-network
+
+networks:
+  project-me-network:
+    driver: bridge
+
+volumes:
+  project-me-data:
+    driver: local
+  elasticsearch_data:
+    driver: local

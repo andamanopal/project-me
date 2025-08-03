@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  /* Cold blue color palette */
+  --color-blue-primary: #1d4ed8;
+  --color-blue-secondary: #3b82f6;
+  --color-indigo-primary: #6366f1;
+  --color-indigo-secondary: #4f46e5;
+  --color-cyan-primary: #0ea5e9;
+  --color-cyan-secondary: #0284c7;
+
+  /* Gradient backgrounds */
+  --gradient-blob-primary: radial-gradient(circle, var(--color-blue-primary) 0%, var(--color-blue-secondary) 40%, transparent 70%);
+  --gradient-blob-secondary: radial-gradient(circle, var(--color-indigo-primary) 0%, var(--color-indigo-secondary) 40%, transparent 70%);
+  --gradient-blob-accent: radial-gradient(circle, var(--color-cyan-primary) 0%, var(--color-cyan-secondary) 40%, transparent 70%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Gradient blob utilities */
+  .bg-gradient-blob-primary {
+    background: var(--gradient-blob-primary);
+    background-size: 200% 200%;
+  }
+
+  .bg-gradient-blob-secondary {
+    background: var(--gradient-blob-secondary);
+    background-size: 200% 200%;
+  }
+
+  .bg-gradient-blob-accent {
+    background: var(--gradient-blob-accent);
+    background-size: 200% 200%;
+  }
+}
