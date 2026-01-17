@@ -27,7 +27,7 @@ export interface UseVoiceCallReturn {
   /** Whether the bot has joined the room */
   isBotConnected: boolean
   /** Start a voice call */
-  startCall: (roomUrl: string) => Promise<void>
+  startCall: (roomUrl: string, token?: string) => Promise<void>
   /** End the current call */
   endCall: () => void
   /** Toggle microphone mute */
@@ -80,11 +80,11 @@ export function useVoiceCall(): UseVoiceCallReturn {
   /**
    * Trigger RunPod pipeline to join the room
    */
-  const triggerRunPod = useCallback(async (roomUrl: string) => {
+  const triggerRunPod = useCallback(async (roomUrl: string, token?: string) => {
     const response = await fetch('/api/voice/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ room_url: roomUrl }),
+      body: JSON.stringify({ room_url: roomUrl, token }),
     })
 
     if (!response.ok) {
@@ -98,7 +98,7 @@ export function useVoiceCall(): UseVoiceCallReturn {
   /**
    * Start a voice call
    */
-  const startCall = useCallback(async (roomUrl: string) => {
+  const startCall = useCallback(async (roomUrl: string, token?: string) => {
     setError(null)
     setCallState('connecting')
 
@@ -140,11 +140,11 @@ export function useVoiceCall(): UseVoiceCallReturn {
         setCallState('error')
       })
 
-      // Join the room
-      await callObject.join({ url: roomUrl })
+      // Join the room (with optional token for private rooms)
+      await callObject.join({ url: roomUrl, token })
 
       // Trigger RunPod to join the same room
-      await triggerRunPod(roomUrl)
+      await triggerRunPod(roomUrl, token)
 
     } catch (err) {
       console.error('[Voice] Error starting call:', err)

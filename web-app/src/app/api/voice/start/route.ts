@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${RUNPOD_API_KEY}`,
+          'Authorization': RUNPOD_API_KEY,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({

@@ -272,7 +272,8 @@ def handler(job):
 
     # Extract parameters
     room_url = job_input["room_url"]
-    token = job_input["token"]
+    # Convert empty token to None for DailyTransport compatibility
+    token = job_input["token"] or None
     system_prompt = job_input.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
     voice_reference_path = job_input.get("voice_reference_path")
 
