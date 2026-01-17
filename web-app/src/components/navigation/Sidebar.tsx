@@ -4,7 +4,7 @@ import { useState, createContext, useContext, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
-import { Home, Clock, Settings, LogOut, User } from 'lucide-react'
+import { Home, Clock, Settings, LogOut, User, Mic } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useProfile } from '@/hooks/useProfile'
 import { useAuth } from '@/hooks/useAuth'
@@ -34,6 +34,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: '/', label: 'Home', icon: Home },
   { href: '/journey', label: 'Journey', icon: Clock },
+  { href: '/voice', label: 'Voice', icon: Mic },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 

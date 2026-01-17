@@ -244,8 +244,7 @@ def validate_input(job_input: dict) -> tuple[bool, str]:
     if "room_url" not in job_input:
         return False, "Missing required field: room_url"
 
-    if "token" not in job_input:
-        return False, "Missing required field: token"
+    # token is optional for public rooms
 
     if not ANTHROPIC_API_KEY:
         return False, "ANTHROPIC_API_KEY environment variable not set"
@@ -253,9 +252,9 @@ def validate_input(job_input: dict) -> tuple[bool, str]:
     return True, ""
 
 
-def handler(job):
+async def async_handler(job):
     """
-    RunPod serverless handler.
+    Async RunPod serverless handler.
 
     Processes voice pipeline jobs for real-time conversation.
     """
@@ -273,19 +272,17 @@ def handler(job):
     # Extract parameters
     room_url = job_input["room_url"]
     # Convert empty token to None for DailyTransport compatibility
-    token = job_input["token"] or None
+    token = job_input.get("token") or None
     system_prompt = job_input.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
     voice_reference_path = job_input.get("voice_reference_path")
 
     try:
-        # Run the async pipeline
-        result = asyncio.run(
-            run_voice_pipeline(
-                room_url=room_url,
-                token=token,
-                system_prompt=system_prompt,
-                voice_reference_path=voice_reference_path,
-            )
+        # Run the async pipeline directly (we're already in async context)
+        result = await run_voice_pipeline(
+            room_url=room_url,
+            token=token,
+            system_prompt=system_prompt,
+            voice_reference_path=voice_reference_path,
         )
 
         logger.info(f"Job {job_id} completed: {result}")
@@ -304,5 +301,5 @@ logger.info("Container starting, pre-warming models...")
 preload_models()
 logger.info("Container ready to accept jobs!")
 
-# Start RunPod serverless worker
-runpod.serverless.start({"handler": handler})
+# Start RunPod serverless worker with async handler
+runpod.serverless.start({"handler": async_handler})

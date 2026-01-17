@@ -141,7 +141,11 @@ export function useVoiceCall(): UseVoiceCallReturn {
       })
 
       // Join the room (with optional token for private rooms)
-      await callObject.join({ url: roomUrl, token })
+      const joinOptions: { url: string; token?: string } = { url: roomUrl }
+      if (token) {
+        joinOptions.token = token
+      }
+      await callObject.join(joinOptions)
 
       // Trigger RunPod to join the same room
       await triggerRunPod(roomUrl, token)
