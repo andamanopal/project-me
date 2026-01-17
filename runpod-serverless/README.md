@@ -164,6 +164,42 @@ print(f"Job: {job['id']} - Open room URL and start talking!")
 
 **~$0.15-0.20 per 5-minute call**
 
+## Local Testing
+
+Test the handler locally on your Mac (without GPU) before deploying:
+
+```bash
+cd runpod-serverless
+
+# Create virtual environment with uv
+uv venv
+source .venv/bin/activate
+
+# Install dependencies
+uv pip install -r requirements.txt
+
+# Set required env vars
+export ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# Run handler (auto-detects CPU on Mac, CUDA on RunPod)
+python handler.py
+```
+
+The handler auto-detects the device:
+- **Mac/CPU**: Uses `device=cpu`, `compute_type=int8`
+- **RunPod/GPU**: Uses `device=cuda`, `compute_type=float16`
+
+**Quick validation** (without running full pipeline):
+```bash
+python -c "from handler import DEVICE, COMPUTE_TYPE; print(f'Device: {DEVICE}, Compute: {COMPUTE_TYPE}')"
+```
+
+**Test with input:**
+```bash
+echo '{"input": {"room_url": "https://your-domain.daily.co/test-room"}}' > test_input.json
+python handler.py
+```
+
 ## Troubleshooting
 
 | Issue | Solution |

@@ -31,7 +31,12 @@ import time
 from typing import Optional
 from functools import lru_cache
 
+import torch
 import runpod
+
+# Auto-detect device: use CUDA if available, otherwise CPU (for local testing)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
 
 # Configure logging
 logging.basicConfig(
@@ -55,16 +60,16 @@ def preload_models():
 
     This is called once when the container starts to warm up models.
     """
-    logger.info("Pre-loading models...")
+    logger.info(f"Pre-loading models on device: {DEVICE}...")
     start = time.time()
 
     # Pre-load Faster-Whisper
     from services.faster_whisper_stt import get_whisper_model
-    get_whisper_model("distil-large-v3", "cuda", "float16")
+    get_whisper_model("distil-large-v3", DEVICE, COMPUTE_TYPE)
 
     # Pre-load Chatterbox
     from services.chatterbox_tts import get_chatterbox_model
-    get_chatterbox_model("cuda")
+    get_chatterbox_model(DEVICE)
 
     elapsed = time.time() - start
     logger.info(f"All models pre-loaded in {elapsed:.2f}s")
@@ -93,6 +98,7 @@ async def run_voice_pipeline(
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.transports.services.daily import DailyTransport, DailyParams
     from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
     from pipecat.services.anthropic import AnthropicLLMService
     from pipecat.processors.aggregators.user_response import UserResponseAggregator
     from pipecat.frames.frames import TextFrame, EndFrame
@@ -103,13 +109,14 @@ async def run_voice_pipeline(
     start_time = time.time()
     turn_count = 0
 
-    # Initialize VAD
+    # Initialize VAD with proper params
     vad = SileroVADAnalyzer(
-        sample_rate=16000,
-        min_volume=0.6,
-        start_secs=0.2,      # Quick response to speech start
-        stop_secs=0.8,       # Wait for natural pauses
-        min_speech_secs=0.5, # Filter out short sounds
+        params=VADParams(
+            confidence=0.7,      # Minimum confidence for voice detection
+            start_secs=0.2,      # Quick response to speech start
+            stop_secs=0.8,       # Wait for natural pauses
+            min_volume=0.6,      # Minimum volume threshold
+        )
     )
 
     # Initialize Daily transport
@@ -131,8 +138,8 @@ async def run_voice_pipeline(
     # Initialize STT (Faster-Whisper)
     stt = FasterWhisperSTTService(
         model_name="distil-large-v3",
-        device="cuda",
-        compute_type="float16",
+        device=DEVICE,
+        compute_type=COMPUTE_TYPE,
         language="en",
         beam_size=5,
         vad_filter=True,
@@ -148,7 +155,7 @@ async def run_voice_pipeline(
 
     # Initialize TTS (Chatterbox)
     tts = ChatterboxTTSService(
-        device="cuda",
+        device=DEVICE,
         sample_rate=24000,
         exaggeration=0.5,
         cfg_weight=0.5,
@@ -297,7 +304,7 @@ async def async_handler(job):
 
 
 # Pre-warm models on container startup
-logger.info("Container starting, pre-warming models...")
+logger.info(f"Container starting on device: {DEVICE}")
 preload_models()
 logger.info("Container ready to accept jobs!")
 
