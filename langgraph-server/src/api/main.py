@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 load_dotenv()
 
@@ -20,6 +21,7 @@ from src.api.routers import (
     conversations_router,
     daily_summaries_router,
     imports_router,
+    openai_compat_router,
     patterns_router,
     voice_router,
     webhooks_router,
@@ -31,13 +33,19 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize LangGraph with AsyncPostgresSaver on startup."""
+    """Initialize LangGraph with AsyncPostgresSaver using connection pool."""
     if settings.database_url:
-        logger.info("Initializing AsyncPostgresSaver for persistent conversations")
-        async with AsyncPostgresSaver.from_conn_string(settings.database_url) as checkpointer:
+        logger.info("Initializing AsyncPostgresSaver with connection pool")
+        # Use connection pool for concurrent request handling
+        async with AsyncConnectionPool(
+            conninfo=settings.database_url,
+            max_size=20,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        ) as pool:
+            checkpointer = AsyncPostgresSaver(pool)
             await checkpointer.setup()
             app.state.graph = build_graph(checkpointer)
-            logger.info("LangGraph initialized with PostgresSaver")
+            logger.info("LangGraph initialized with PostgresSaver (pooled)")
             yield
     else:
         logger.warning("No DATABASE_URL configured, using MemorySaver (not persistent)")
@@ -63,6 +71,7 @@ app.include_router(checkins_router)
 app.include_router(daily_summaries_router)
 app.include_router(patterns_router)
 app.include_router(imports_router)
+app.include_router(openai_compat_router)
 
 # Add CORS middleware for frontend access
 app.add_middleware(
@@ -102,6 +111,10 @@ def root():
             "voice": {
                 "transcribe": "POST /voice/transcribe/{check_in_id}",
                 "status": "GET /voice/status/{check_in_id}",
+            },
+            "openai_compat": {
+                "chat_completions": "POST /v1/chat/completions",
+                "models": "GET /v1/models",
             },
             "check_ins": {
                 "list": "GET /api/check-ins",

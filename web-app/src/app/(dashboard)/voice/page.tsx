@@ -45,7 +45,7 @@ export default function VoicePage() {
         <div className="text-center">
           <h1 className="text-3xl font-bold text-white">Voice Chat</h1>
           <p className="mt-2 text-gray-400">
-            Talk with your AI assistant
+            Talk with yourself
           </p>
         </div>
 

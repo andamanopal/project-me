@@ -4,7 +4,7 @@ RunPod Serverless Handler for Voice Pipeline.
 This handler runs a Pipecat voice pipeline with:
 - Daily.co WebRTC transport
 - Faster-Whisper STT (distil-large-v3)
-- Claude LLM (claude-sonnet-4-20250514)
+- LangGraph LLM (via remote server)
 - Chatterbox TTS
 
 Usage:
@@ -12,8 +12,10 @@ Usage:
     {
         "room_url": "https://your-domain.daily.co/room-name",
         "token": "eyJ...",
-        "system_prompt": "You are a helpful assistant...",
-        "voice_reference_path": "/app/voices/reference.wav"  # optional
+        "voice_reference_path": "/app/voices/reference.wav",  # optional
+        "langgraph_url": "https://your-langgraph-server.com",  # optional, overrides env
+        "user_id": "uuid-of-user",  # optional, for tool access control
+        "session_id": "uuid-of-session"  # optional, for conversation continuity
     }
 
     Job output:
@@ -51,11 +53,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Environment variables
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-DEFAULT_SYSTEM_PROMPT = """You are a helpful personal AI assistant.
-You are having a real-time voice conversation. Keep your responses concise
-and natural - aim for 1-3 sentences unless more detail is needed.
-Be warm, friendly, and helpful."""
+LANGGRAPH_URL = os.environ.get("LANGGRAPH_URL")  # URL to LangGraph server
 
 
 @lru_cache(maxsize=1)
@@ -83,8 +81,10 @@ def preload_models():
 async def run_voice_pipeline(
     room_url: str,
     token: str,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     voice_reference_path: Optional[str] = None,
+    langgraph_url: Optional[str] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """
     Run the voice pipeline in the Daily.co room.
@@ -92,8 +92,10 @@ async def run_voice_pipeline(
     Args:
         room_url: Daily.co room URL
         token: Daily.co meeting token
-        system_prompt: System prompt for Claude
         voice_reference_path: Optional path to voice reference for Chatterbox
+        langgraph_url: URL to LangGraph server (overrides LANGGRAPH_URL env var)
+        user_id: User ID for tool access control (passed to LangGraph)
+        session_id: Session ID for conversation continuity (used as thread_id)
 
     Returns:
         Dictionary with status, duration, and conversation metrics
@@ -104,16 +106,22 @@ async def run_voice_pipeline(
     from pipecat.transports.daily.transport import DailyTransport, DailyParams
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.audio.vad.vad_analyzer import VADParams
-    from pipecat.services.anthropic.llm import AnthropicLLMService
     from pipecat.frames.frames import EndFrame, LLMMessagesFrame
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
     from services.faster_whisper_stt import FasterWhisperSTTService
     from services.chatterbox_tts import ChatterboxTTSService
+    from services.langgraph_llm import LangGraphLLMService
 
     start_time = time.time()
     turn_count = 0
+
+    # Generate session_id for conversation continuity if not provided
+    if not session_id:
+        import uuid
+        session_id = str(uuid.uuid4())
+        logger.info(f"Generated session_id: {session_id}")
 
     # Initialize VAD
     vad = SileroVADAnalyzer(
@@ -148,10 +156,21 @@ async def run_voice_pipeline(
         sample_rate=16000,
     )
 
-    # Initialize LLM (Claude)
-    llm = AnthropicLLMService(
-        api_key=ANTHROPIC_API_KEY,
-        model="claude-sonnet-4-20250514",
+    # Initialize LLM (LangGraph)
+    # Encode user_id and session_id in the "user" field (format: "user_id::session_id")
+    # This is the only field that reliably passes through the OpenAI SDK
+    llm_url = langgraph_url or LANGGRAPH_URL
+    from pipecat.services.openai.base_llm import BaseOpenAILLMService
+    
+    # Format: "user_id::session_id" - LangGraph will parse this
+    user_field = f"{user_id or ''}::{session_id}"
+    
+    llm = LangGraphLLMService(
+        base_url=llm_url,
+        model="langgraph-agent",
+        params=BaseOpenAILLMService.InputParams(
+            extra={"user": user_field},
+        ),
     )
 
     # Initialize TTS (Chatterbox)
@@ -163,11 +182,8 @@ async def run_voice_pipeline(
         reference_audio_path=voice_reference_path,
     )
 
-    # Conversation context with system prompt
-    messages = [
-        {"role": "system", "content": system_prompt},
-    ]
-    context = LLMContext(messages)
+    # Conversation context (system prompt is handled by LangGraph server)
+    context = LLMContext()
 
     # Context aggregators for proper conversation flow
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
@@ -214,8 +230,9 @@ async def run_voice_pipeline(
         if is_human and not greeted:
             greeted = True
             logger.info("Sending greeting to human user")
-            messages.append({"role": "user", "content": "Please introduce yourself briefly."})
-            await task.queue_frame(LLMMessagesFrame(messages))
+            # Send greeting prompt to trigger LLM introduction
+            greeting_messages = [{"role": "user", "content": "Please introduce yourself briefly."}]
+            await task.queue_frame(LLMMessagesFrame(greeting_messages))
 
     @transport.event_handler("on_participant_left")
     async def on_participant_left(transport, participant, reason=None):
@@ -267,8 +284,10 @@ def validate_input(job_input: dict) -> tuple[bool, str]:
 
     # token is optional for public rooms
 
-    if not ANTHROPIC_API_KEY:
-        return False, "ANTHROPIC_API_KEY environment variable not set"
+    # Check LangGraph URL (from input or env)
+    langgraph_url = job_input.get("langgraph_url") or LANGGRAPH_URL
+    if not langgraph_url:
+        return False, "LANGGRAPH_URL environment variable not set and langgraph_url not provided in input"
 
     return True, ""
 
@@ -294,16 +313,20 @@ async def async_handler(job):
     room_url = job_input["room_url"]
     # Convert empty token to None for DailyTransport compatibility
     token = job_input.get("token") or None
-    system_prompt = job_input.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
     voice_reference_path = job_input.get("voice_reference_path")
+    langgraph_url = job_input.get("langgraph_url")
+    user_id = job_input.get("user_id")  # For tool access control
+    session_id = job_input.get("session_id")  # For conversation continuity
 
     try:
         # Run the async pipeline directly (we're already in async context)
         result = await run_voice_pipeline(
             room_url=room_url,
             token=token,
-            system_prompt=system_prompt,
             voice_reference_path=voice_reference_path,
+            langgraph_url=langgraph_url,
+            user_id=user_id,
+            session_id=session_id,
         )
 
         logger.info(f"Job {job_id} completed: {result}")

@@ -1,7 +1,30 @@
+import { createServerClient } from '@supabase/ssr'
 import { NextRequest, NextResponse } from 'next/server'
 
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY
 const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID
+
+/**
+ * Get authenticated user from request cookies.
+ */
+async function getAuthUser(request: NextRequest) {
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll() {
+          // Not needed for read-only operations
+        },
+      },
+    }
+  )
+  const { data: { user } } = await supabase.auth.getUser()
+  return user
+}
 
 interface StartVoiceRequest {
   room_url: string
@@ -44,6 +67,15 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // Get authenticated user for tool access control
+  const user = await getAuthUser(request)
+  if (!user) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    )
+  }
+
   try {
     const response = await fetch(
       `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/run`,
@@ -57,6 +89,7 @@ export async function POST(request: NextRequest) {
           input: {
             room_url,
             token: token || '',
+            user_id: user.id,
           },
         }),
       }
