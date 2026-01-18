@@ -28,7 +28,7 @@ export default function VoicePage() {
 
   const handleStartCall = () => {
     if (roomUrl.trim()) {
-      startCall(roomUrl.trim())
+      startCall({ roomUrl: roomUrl.trim() })
     }
   }
 

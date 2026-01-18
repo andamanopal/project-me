@@ -3,46 +3,30 @@ import Daily, {
   DailyCall,
   DailyEventObjectParticipant,
   DailyEventObjectParticipantLeft,
+  DailyEventObjectFatalError,
+  DailyEventObjectTrack,
 } from '@daily-co/daily-js'
 
-/**
- * Voice call connection states
- */
-export type VoiceCallState =
-  | 'idle'
-  | 'connecting'
-  | 'connected'
-  | 'error'
+export type VoiceCallState = 'idle' | 'connecting' | 'connected' | 'error'
 
-/**
- * Return type for useVoiceCall hook
- */
+interface StartCallOptions {
+  roomUrl: string
+  token?: string
+  userName?: string
+}
+
 export interface UseVoiceCallReturn {
-  /** Current call state */
   callState: VoiceCallState
-  /** Error message if any */
   error: string | null
-  /** Whether microphone is muted */
   isMuted: boolean
-  /** Whether the bot has joined the room */
   isBotConnected: boolean
-  /** Start a voice call */
-  startCall: (roomUrl: string, token?: string) => Promise<void>
-  /** End the current call */
+  startCall: (options: StartCallOptions) => Promise<void>
   endCall: () => void
-  /** Toggle microphone mute */
   toggleMute: () => void
 }
 
-/**
- * Hook for managing Daily.co voice calls with RunPod pipeline.
- *
- * Handles:
- * - Daily.co call object lifecycle
- * - Room joining/leaving
- * - Microphone mute toggle
- * - Bot participant detection
- */
+const DEFAULT_USER_NAME = 'Me'
+
 export function useVoiceCall(): UseVoiceCallReturn {
   const [callState, setCallState] = useState<VoiceCallState>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -50,11 +34,18 @@ export function useVoiceCall(): UseVoiceCallReturn {
   const [isBotConnected, setIsBotConnected] = useState(false)
 
   const callObjectRef = useRef<DailyCall | null>(null)
+  const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
 
-  /**
-   * Clean up Daily.co call object
-   */
+  const cleanupAudioElements = useCallback(() => {
+    audioElementsRef.current.forEach((audio) => {
+      audio.srcObject = null
+      audio.remove()
+    })
+    audioElementsRef.current.clear()
+  }, [])
+
   const cleanup = useCallback(async () => {
+    cleanupAudioElements()
     if (callObjectRef.current) {
       try {
         await callObjectRef.current.leave()
@@ -66,20 +57,14 @@ export function useVoiceCall(): UseVoiceCallReturn {
     }
     setIsBotConnected(false)
     setIsMuted(false)
-  }, [])
+  }, [cleanupAudioElements])
 
-  /**
-   * Clean up on unmount
-   */
   useEffect(() => {
     return () => {
       cleanup()
     }
   }, [cleanup])
 
-  /**
-   * Trigger RunPod pipeline to join the room
-   */
   const triggerRunPod = useCallback(async (roomUrl: string, token?: string) => {
     const response = await fetch('/api/voice/start', {
       method: 'POST',
@@ -95,60 +80,89 @@ export function useVoiceCall(): UseVoiceCallReturn {
     return response.json()
   }, [])
 
-  /**
-   * Start a voice call
-   */
-  const startCall = useCallback(async (roomUrl: string, token?: string) => {
+  const handleTrackStarted = useCallback((event: DailyEventObjectTrack | undefined) => {
+    if (!event?.track || event.track.kind !== 'audio' || event.participant?.local) return
+
+    const participantId = event.participant?.session_id
+    if (!participantId) return
+
+    // Avoid duplicate audio elements
+    if (audioElementsRef.current.has(participantId)) return
+
+    const audio = document.createElement('audio')
+    audio.srcObject = new MediaStream([event.track])
+    audio.autoplay = true
+    audio.setAttribute('playsinline', 'true')
+    audioElementsRef.current.set(participantId, audio)
+    audio.play().catch(console.error)
+  }, [])
+
+  const handleTrackStopped = useCallback((event: DailyEventObjectTrack | undefined) => {
+    if (!event?.participant?.session_id) return
+
+    const audio = audioElementsRef.current.get(event.participant.session_id)
+    if (audio) {
+      audio.srcObject = null
+      audio.remove()
+      audioElementsRef.current.delete(event.participant.session_id)
+    }
+  }, [])
+
+  const handleParticipantJoined = useCallback((event: DailyEventObjectParticipant | undefined) => {
+    if (event?.participant && !event.participant.local) {
+      setIsBotConnected(true)
+    }
+  }, [])
+
+  const handleParticipantLeft = useCallback((event: DailyEventObjectParticipantLeft | undefined) => {
+    if (event?.participant && !event.participant.local) {
+      setIsBotConnected(false)
+      handleTrackStopped({ participant: event.participant } as DailyEventObjectTrack)
+    }
+  }, [handleTrackStopped])
+
+  const handleError = useCallback((event: DailyEventObjectFatalError | undefined) => {
+    console.error('[Voice] Daily.co error:', event)
+    setError(event?.errorMsg || 'Connection error')
+    setCallState('error')
+  }, [])
+
+  const startCall = useCallback(async ({ roomUrl, token, userName }: StartCallOptions) => {
+    if (callObjectRef.current) {
+      console.warn('[Voice] Call already in progress')
+      return
+    }
+
     setError(null)
     setCallState('connecting')
 
     try {
-      // Create Daily.co call object
       const callObject = Daily.createCallObject({
         audioSource: true,
         videoSource: false,
+        subscribeToTracksAutomatically: true,
       })
       callObjectRef.current = callObject
 
-      // Set up event handlers
-      callObject.on('joined-meeting', () => {
-        setCallState('connected')
-      })
-
+      callObject.on('joined-meeting', () => setCallState('connected'))
       callObject.on('left-meeting', () => {
         setCallState('idle')
         setIsBotConnected(false)
       })
+      callObject.on('participant-joined', handleParticipantJoined)
+      callObject.on('participant-left', handleParticipantLeft)
+      callObject.on('track-started', handleTrackStarted)
+      callObject.on('track-stopped', handleTrackStopped)
+      callObject.on('error', handleError)
 
-      callObject.on('participant-joined', (event: DailyEventObjectParticipant | undefined) => {
-        if (event?.participant && !event.participant.local) {
-          // Non-local participant joined (the bot)
-          setIsBotConnected(true)
-        }
+      await callObject.join({
+        url: roomUrl,
+        userName: userName ?? DEFAULT_USER_NAME,
+        ...(token && { token }),
       })
-
-      callObject.on('participant-left', (event: DailyEventObjectParticipantLeft | undefined) => {
-        if (event?.participant && !event.participant.local) {
-          // Bot left
-          setIsBotConnected(false)
-        }
-      })
-
-      callObject.on('error', (event) => {
-        console.error('[Voice] Daily.co error:', event)
-        setError(event?.errorMsg || 'Connection error')
-        setCallState('error')
-      })
-
-      // Join the room (with optional token for private rooms)
-      const joinOptions: { url: string; token?: string } = { url: roomUrl }
-      if (token) {
-        joinOptions.token = token
-      }
-      await callObject.join(joinOptions)
 
       // Trigger RunPod to join the same room
-      await triggerRunPod(roomUrl, token)
+      // await triggerRunPod(roomUrl, token)
 
     } catch (err) {
       console.error('[Voice] Error starting call:', err)
@@ -156,26 +170,19 @@ export function useVoiceCall(): UseVoiceCallReturn {
       setCallState('error')
       await cleanup()
     }
-  }, [triggerRunPod, cleanup])
+  }, [cleanup, handleParticipantJoined, handleParticipantLeft, handleTrackStarted, handleTrackStopped, handleError])
 
-  /**
-   * End the current call
-   */
   const endCall = useCallback(async () => {
     await cleanup()
     setCallState('idle')
     setError(null)
   }, [cleanup])
 
-  /**
-   * Toggle microphone mute
-   */
   const toggleMute = useCallback(() => {
-    if (callObjectRef.current) {
-      const newMuted = !isMuted
-      callObjectRef.current.setLocalAudio(!newMuted)
-      setIsMuted(newMuted)
-    }
+    if (!callObjectRef.current) return
+    const newMuted = !isMuted
+    callObjectRef.current.setLocalAudio(!newMuted)
+    setIsMuted(newMuted)
   }, [isMuted])
 
   return {

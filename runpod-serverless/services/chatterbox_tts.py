@@ -8,20 +8,16 @@ for high-quality, low-latency voice synthesis.
 import asyncio
 import logging
 import numpy as np
-import io
 from typing import Optional, AsyncGenerator
 from functools import lru_cache
 
 from pipecat.frames.frames import (
     Frame,
-    TextFrame,
     TTSAudioRawFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-    ErrorFrame,
 )
-from pipecat.services.ai_services import TTSService
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.tts_service import TTSService
 
 logger = logging.getLogger(__name__)
 
@@ -150,17 +146,14 @@ class ChatterboxTTSService(TTSService):
         """
         Convert text to speech and yield audio frames.
 
-        Yields TTSAudioRawFrame chunks for streaming playback.
+        This is the main method called by the Pipecat TTSService base class.
         """
         if not text or not text.strip():
             return
 
-        logger.debug(f"Synthesizing: {text[:50]}...")
+        logger.info(f"[TTS] Synthesizing: {text[:80]}...")
 
         try:
-            # Signal TTS started
-            yield TTSStartedFrame()
-
             # Synthesize audio
             audio_bytes = await self._synthesize(text)
 
@@ -173,27 +166,10 @@ class ChatterboxTTSService(TTSService):
                     num_channels=1,
                 )
 
-            # Signal TTS stopped
-            yield TTSStoppedFrame()
-
             logger.debug("TTS synthesis complete")
 
         except Exception as e:
             logger.error(f"TTS synthesis error: {e}")
-            yield ErrorFrame(error=f"TTS synthesis failed: {str(e)}")
-            yield TTSStoppedFrame()
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process incoming text frames."""
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, TextFrame):
-            # Process text through TTS
-            async for audio_frame in self.run_tts(frame.text):
-                await self.push_frame(audio_frame, direction)
-        else:
-            # Pass through other frames
-            await self.push_frame(frame, direction)
 
 
 class ChatterboxTTSServiceWithResampling(ChatterboxTTSService):

@@ -28,8 +28,13 @@ import os
 import asyncio
 import logging
 import time
+import warnings
 from typing import Optional
 from functools import lru_cache
+
+# Suppress noisy warnings from faster-whisper
+warnings.filterwarnings("ignore", message=".*matmul.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 import torch
 import runpod
@@ -94,14 +99,15 @@ async def run_voice_pipeline(
         Dictionary with status, duration, and conversation metrics
     """
     from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.pipeline.task import PipelineTask
+    from pipecat.pipeline.task import PipelineTask, PipelineParams
     from pipecat.pipeline.runner import PipelineRunner
-    from pipecat.transports.services.daily import DailyTransport, DailyParams
+    from pipecat.transports.daily.transport import DailyTransport, DailyParams
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.audio.vad.vad_analyzer import VADParams
-    from pipecat.services.anthropic import AnthropicLLMService
-    from pipecat.processors.aggregators.user_response import UserResponseAggregator
-    from pipecat.frames.frames import TextFrame, EndFrame
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+    from pipecat.frames.frames import EndFrame, LLMMessagesFrame
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
     from services.faster_whisper_stt import FasterWhisperSTTService
     from services.chatterbox_tts import ChatterboxTTSService
@@ -109,13 +115,10 @@ async def run_voice_pipeline(
     start_time = time.time()
     turn_count = 0
 
-    # Initialize VAD with proper params
+    # Initialize VAD
     vad = SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.7,      # Minimum confidence for voice detection
-            start_secs=0.2,      # Quick response to speech start
-            stop_secs=0.8,       # Wait for natural pauses
-            min_volume=0.6,      # Minimum volume threshold
+            stop_secs=0.5,
         )
     )
 
@@ -129,28 +132,26 @@ async def run_voice_pipeline(
             audio_out_enabled=True,
             audio_in_sample_rate=16000,
             audio_out_sample_rate=24000,
-            vad_enabled=True,
             vad_analyzer=vad,
-            transcription_enabled=False,  # We use our own STT
+            transcription_enabled=False,
         )
     )
 
-    # Initialize STT (Faster-Whisper)
+    # Initialize STT (Faster-Whisper with SegmentedSTTService)
     stt = FasterWhisperSTTService(
         model_name="distil-large-v3",
         device=DEVICE,
         compute_type=COMPUTE_TYPE,
         language="en",
         beam_size=5,
-        vad_filter=True,
+        no_speech_prob=0.4,  # Filter segments with high no_speech probability
         sample_rate=16000,
     )
 
-    # Initialize LLM (Claude) with system prompt
+    # Initialize LLM (Claude)
     llm = AnthropicLLMService(
         api_key=ANTHROPIC_API_KEY,
         model="claude-sonnet-4-20250514",
-        system_prompt=system_prompt,
     )
 
     # Initialize TTS (Chatterbox)
@@ -162,57 +163,71 @@ async def run_voice_pipeline(
         reference_audio_path=voice_reference_path,
     )
 
-    # Aggregator for proper conversation handling
-    user_aggregator = UserResponseAggregator()
+    # Conversation context with system prompt
+    messages = [
+        {"role": "system", "content": system_prompt},
+    ]
+    context = LLMContext(messages)
 
-    # Build pipeline
+    # Context aggregators for proper conversation flow
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+
+    # Build pipeline with proper aggregators
     pipeline = Pipeline([
-        transport.input(),        # Audio from Daily.co
-        stt,                      # Speech-to-Text
-        user_aggregator,          # Aggregate user speech
-        llm,                      # Claude LLM
-        tts,                      # Text-to-Speech
-        transport.output(),       # Audio back to Daily.co
+        transport.input(),
+        stt,
+        user_aggregator,
+        llm,
+        tts,
+        transport.output(),
+        assistant_aggregator,
     ])
 
     # Create runner and task
     runner = PipelineRunner()
-    task = PipelineTask(pipeline)
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            enable_metrics=True,
+        ),
+    )
 
     # Track conversation metrics
     pipeline_done = asyncio.Event()
+    greeted = False
 
     @transport.event_handler("on_participant_joined")
-    async def on_participant_joined(participant):
-        nonlocal turn_count
-        logger.info(f"Participant joined: {participant.get('id', 'unknown')}")
+    async def on_participant_joined(transport, participant):
+        nonlocal greeted
+        participant_id = participant.get('id', 'unknown')
+        is_local = participant.get('local', False)
+        participant_info = participant.get('info', {})
+        is_owner = participant_info.get('isOwner', False)
+        user_name = participant_info.get('userName', '')
+        
+        logger.info(f"Participant joined: {participant_id} (local={is_local}, owner={is_owner}, name={user_name})")
 
-        # Greet the user
-        greeting = "Hello! I'm your personal AI assistant. How can I help you today?"
-        await task.queue_frames([TextFrame(text=greeting)])
-        turn_count += 1
+        # Only greet real human users (not local bot, not other bots)
+        # Check: not local AND (is owner OR has a real user name that's not a bot)
+        is_human = not is_local and (is_owner or (user_name and 'bot' not in user_name.lower() and 'assistant' not in user_name.lower()))
+        
+        if is_human and not greeted:
+            greeted = True
+            logger.info("Sending greeting to human user")
+            messages.append({"role": "user", "content": "Please introduce yourself briefly."})
+            await task.queue_frame(LLMMessagesFrame(messages))
 
     @transport.event_handler("on_participant_left")
-    async def on_participant_left(participant, reason=None):
+    async def on_participant_left(transport, participant, reason=None):
         logger.info(f"Participant left: {participant.get('id', 'unknown')}")
         await task.queue_frame(EndFrame())
         pipeline_done.set()
 
     @transport.event_handler("on_call_state_updated")
-    async def on_call_state_updated(state):
+    async def on_call_state_updated(transport, state):
         if state == "left":
             logger.info("Call ended")
             pipeline_done.set()
-
-    # Track turns on transcription
-    original_process = stt.process_frame
-    async def counting_process(frame, direction):
-        nonlocal turn_count
-        from pipecat.frames.frames import TranscriptionFrame
-        if isinstance(frame, TranscriptionFrame):
-            turn_count += 1
-        await original_process(frame, direction)
-    stt.process_frame = counting_process
 
     try:
         # Run the pipeline
@@ -230,9 +245,8 @@ async def run_voice_pipeline(
         logger.error(f"Pipeline error: {e}")
         raise
     finally:
-        # Cleanup
-        await transport.leave()
-        logger.info("Pipeline stopped, transport cleaned up")
+        # Cleanup - transport is cleaned up automatically by the pipeline
+        logger.info("Pipeline stopped")
 
     duration = time.time() - start_time
 
